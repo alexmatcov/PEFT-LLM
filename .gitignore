@@ -1,0 +1,11 @@
+.DS_Store
+.venv/
+__pycache__/
+.ipynb_checkpoints/
+lora_model/
+outputs/
+checkpoint-*/
+.env
+.python*
+
+

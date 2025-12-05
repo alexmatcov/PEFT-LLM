@@ -102,7 +102,9 @@ Task 2 focuses on systematically improving our model along two primary axes:
 1. Model-centric optimization (architecture & hyperparameters)
 2. Data-centric scaling (more/better training data)
 
-To evaluate the models, we collected training data on timing and resource usage as well as had them answer the following questions:
+Additionally, we fine-tune a **second foundation model** (3B parameters) to compare quality and resource usage with a larger model.
+
+To evaluate the models, we collected training metrics (loss, runtime, GPU memory) and manually evaluated all models on the same fixed set of 10 prompts:
 
 - Explain how a VPN works in one short paragraph.
 - List three differences between supervised and unsupervised learning.
@@ -166,7 +168,7 @@ Establish a baseline fine-tuned model to compare model-centric and data-centric 
 
 - Outputs are more structured and somewhat more helpful than T0.
 - System / meta-prompt leakage is **still present** in all answers.
-- Swedish translation still fails (English sentence is repeated instead of translated), thus follows directions slightly worse.
+- Swedish translation still fails (English sentence is repeated instead of translated), thus follows directions slightly worse than the base model.
 
 T1 is the **fine-tuned reference point** for experiments T2 and T3.
 
@@ -203,8 +205,7 @@ Increase LoRA capacity to see whether a higher-rank adapter improves convergence
 
 **Conclusion (model-centric):**
 
-- Increasing LoRA rank from 16 → 64 **improves convergence and perceived quality**.
-- Extra cost in runtime and VRAM is modest and easily manageable on a T4.
+Increasing LoRA rank from 16 → 64 **improves convergence and perceived quality** for items within the training dataset, with only a modest increase in runtime and VRAM usage on a T4. However, the model also loses quality in certain areas not covered in the training dataset, like translations.
 
 ---
 
@@ -228,12 +229,15 @@ Test whether simply increasing the number of training examples improves downstre
 - Peak GPU memory: **3.367 GB**
 - LoRA-specific memory: **0.385 GB**
 
-| Metric        | T1 (r=16) | T3 (r=64, n=30,000)    |
-| ------------- | --------- | ------------ |
-| Final loss    | 0.8918    | **0.8835** ⬇ |
-| Runtime (s)   | 2594.04   | **2647.19**  |
-| Peak GPU (GB) | 2.564     | **3.367 GB**    |
-| LoRA GPU (GB) | 1.361     | **0.385 GB**    |
+
+For comparison with T2 (same LoRA, different data size):
+
+| Metric        | T2 (10k) | T3 (30k)                                              |
+| ------------- | -------- | ----------------------------------------------------- |
+| Final loss    | 0.8806   | **0.8835** (slightly worse, but different data slice) |
+| Runtime (s)   | 2649.69  | **2647.19**                                           |
+| Peak GPU (GB) | 2.955    | **3.367**                                             |
+
 
 **Qualitative evaluation (`eval_data_centric_1B_r64_30k_600steps`):**
 
@@ -244,5 +248,72 @@ Test whether simply increasing the number of training examples improves downstre
 
 **Conclusion (data-centric):**
 
-- In this setup, **more data alone** did **not** fix the key failure modes or significantly improve behavior.
-- Dataset composition / alignment likely matters more than sheer volume.
+In this setup, **more data alone** did **not** fix the key failure modes or significantly improve behavior. Dataset composition / alignment likely matters more than sheer volume.
+
+### T4 — Larger foundation model (3B, LoRA r=64, 30k, 400 steps)
+
+**Purpose:**
+Evaluate whether a larger base model (3B parameters) improves task performance and instruction following, and consider the trade-offs for CPU-only inference in the UI.
+
+**Setup:**
+
+- Run name: `model2_3B_r64_30k_400steps`
+- Base model: `unsloth/Llama-3.2-3B-Instruct-bnb-4bit`
+- Dataset: `train[:30000]`
+- LoRA: `r = 64`, `lora_alpha = 64`
+- `max_steps = 400` (reduced to keep runtime manageable)
+
+**Metrics:**
+
+- Final training loss: **0.7688**
+- Runtime: **3515.17 s** (~58.6 min)
+- Peak GPU memory: **4.43 GB**
+- LoRA-specific memory: **1.36 GB**
+
+Compared to the best 1B run (T2):
+
+| Metric        | T2 (1B, 10k, 600) | T4 (3B, 30k, 400) |
+| ------------- | ----------------- | ----------------- |
+| Final loss    | 0.8806            | **0.7688** ⬇⬇     |
+| Runtime (s)   | 2649.69           | **3515.17** ⬆     |
+| Peak GPU (GB) | 2.955             | **4.43** ⬆        |
+| LoRA GPU (GB) | 1.752             | **1.36**          |
+
+**Qualitative evaluation:**
+
+- Explanations (VPN, supervised vs unsupervised, overfitting, Ada Lovelace) are **clear and concise**, often a bit better structured than T2/T3.
+- Email and study tips are **high quality** and very usable.
+- **System / meta-prompt leakage still appears** (ChatML header).
+- **Swedish translation improves slightly but is still wrong**:
+
+  > `Kafféet är för varm att dricka.`
+  > (wrong spelling and adjective agreement).
+
+- For the Python function prompt, the model produces a step-by-step explanation rather than just returning a clean function; this is **less aligned** with the instruction than the 1B runs.
+
+**Conclusion (larger model):**
+
+- The 3B model achieves the **lowest training loss** and generally strong natural-language answers.
+- However, it **does not fix all alignment issues** (system leakage, translation, strict instruction following for code).
+- It is also **more expensive** to train and will be **slower for CPU inference** in the UI. For a lightweight, responsive demo app, the **1B r=64 model (T2)** may remain the more practical choice.
+
+---
+
+## Task 2 Summary & Conclusions
+
+- **Model-centric tuning works best:**
+  Increasing LoRA rank from 16 → 64 (T2) provides the most consistent improvement for the 1B model, with only modest cost in VRAM and runtime.
+
+- **Data-centric scaling (more of the same data) has limited impact:**
+  Tripling the dataset size from 10k → 30k (T3) does not noticeably improve qualitative behavior.
+
+- **Second foundation model (3B) improves loss but not alignment:**
+  The 3B model (T4) trains to a much lower loss and gives strong explanations, but still suffers from occasionally verbose or misaligned answers. Considering the improvement between the 1B and 3B models, it appears that the more advanced models must be using even more features.
+
+- **Best trade-off so far for a CPU-backed UI:**
+  Considering quality vs. cost, the **1B, r=64 model (T2)** is a good compromise:
+
+  - Better than T1 and T0 on most tasks
+  - More efficient than the 3B model for deployment on CPU-only infrastructure (Hugging Face Spaces / Streamlit Cloud).
+
+Overall, Task 2 demonstrates that **model-centric changes (LoRA rank, base model size)** can significantly affect performance, while naive data scaling has limited benefits without more carefully curated or better-aligned instruction data.

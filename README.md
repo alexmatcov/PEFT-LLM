@@ -1,5 +1,19 @@
 # PEFT-Optimization Notebook
 
+## Links
+- 🤗 **[Live Demo (HF Space)](https://huggingface.co/spaces/matcov/study-card-generator)**
+- 🤗 **[Model Weights](https://huggingface.co/dnagard/PEFT-optimization)**
+
+## Project Overview
+Fine-tuned Llama 3.2 1B on FineTome-100k using LoRA for KTH ID2223 Lab 2.
+The model powers a Study Card Generator that creates flashcards from any topic.
+
+## How to Run the UI Locally
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
 ## Experiments
 
 This section documents the fine-tuning experiments conducted so far. The goal of these early runs was to validate the full workflow—from data processing and LoRA training to GGUF export—while measuring GPU usage and training behavior under different configurations. All experiments were performed in Google Colab on a T4 GPU using 4-bit quantized base models and LoRA adapters.

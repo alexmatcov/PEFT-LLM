@@ -1,8 +1,8 @@
 # PEFT-Optimization Notebook
 
 ## Links
-- 🤗 **[Live Demo (HF Space)](https://huggingface.co/spaces/matcov/study-card-generator)**
-- 🤗 **[Model Weights](https://huggingface.co/dnagard/PEFT-optimization)**
+- 🤗 **[Live Demo (HF Space)](https://dnagard-study-card-generator.hf.space)**
+- 🤗 **[Model Store](https://huggingface.co/dnagard/PEFT-optimization)**
 
 ## Project Overview
 Fine-tuned Llama 3.2 1B on FineTome-100k using LoRA for KTH ID2223 Lab 2.

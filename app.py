@@ -5,33 +5,40 @@ Generates flashcards from topics or text for studying
 """
 
 import gradio as gr
-from llama_cpp import Llama
 from huggingface_hub import hf_hub_download
 import json
 import re
 import os
+from functools import lru_cache
 
 # Model configuration
 HF_REPO_ID = "dnagard/PEFT-optimization"
 GGUF_FILENAME = "llama-3.2-1b-finetuned-q8_0_v2.gguf"
 
 # Download and load model
-print(f"Downloading model from {HF_REPO_ID}...")
-model_path = hf_hub_download(
-    repo_id=HF_REPO_ID,
-    filename=GGUF_FILENAME,
-)
-print(f"Model downloaded to: {model_path}")
+@lru_cache(maxsize=1)
+def get_model():
+    from llama_cpp import Llama
+    print(f"Downloading model from {HF_REPO_ID}...")
+    model_path = hf_hub_download(
+        repo_id=HF_REPO_ID,
+        filename=GGUF_FILENAME,
+        token=os.environ.get("HF_TOKEN"),
+        cache_dir="models",
+    )
+    print(f"Model downloaded to: {model_path}")
 
-print("Loading model...")
-llm = Llama(
-    model_path=model_path,
-    n_ctx=2048,
-    n_threads=2,
-    n_gpu_layers=0,
-    verbose=False
-)
-print("Model loaded!")
+    print("Loading model...")
+    llm = Llama(
+        model_path=model_path,
+        n_ctx=1024,    # drop to 1024 if memory is tight
+        n_threads=2,
+        n_gpu_layers=0,
+        verbose=False,
+    )
+    print("Model loaded!")
+    return llm
+
 
 
 SYSTEM_PROMPT = """You are a helpful study assistant that creates flashcards for students. 
@@ -39,18 +46,14 @@ When asked to create study cards, generate clear question-answer pairs that help
 Format each card as:
 Q: [question]
 A: [answer]
-
 Keep answers concise but informative."""
 
 
 def format_prompt(message: str) -> str:
     """Format prompt for Llama 3.2 Instruct."""
     return f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
 {SYSTEM_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>
-
 {message}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
 """
 
 
@@ -80,46 +83,52 @@ def parse_cards(text: str) -> list:
 
 
 def generate_cards(topic: str, source_text: str, num_cards: int, difficulty: str) -> tuple:
-    """Generate study cards from topic or source text."""
-    
+    """Generate study cards from a topic or source text using the GGUF model."""
+    # Basic validation
     if not topic and not source_text:
         return "⚠️ Please enter a topic or paste some text to study.", ""
-    
-    # Build the prompt
+
+    # Build the user-facing instruction
     if source_text:
         user_prompt = f"""Create {num_cards} study flashcards based on this text:
-
-"{source_text}"
-
+\"\"\"{source_text}\"\"\"
 Difficulty level: {difficulty}
 Generate {num_cards} question-answer pairs covering the key concepts."""
     else:
         user_prompt = f"""Create {num_cards} study flashcards about: {topic}
-
 Difficulty level: {difficulty}
 Generate {num_cards} question-answer pairs covering important concepts about this topic."""
 
+    # Wrap into the Llama 3.2-style prompt
     prompt = format_prompt(user_prompt)
-    
-    # Generate
-    output = llm(
-        prompt,
-        max_tokens=512,
-        temperature=0.7,
-        top_p=0.9,
-        stop=["<|eot_id|>", "<|end_of_text|>"],
-        echo=False
-    )
-    
-    raw_output = output["choices"][0]["text"].strip()
-    
+
+    try:
+        # Lazy-load / cached model
+        llm = get_model()
+
+        # Call llama.cpp (completion-style API)
+        output = llm(
+            prompt,
+            max_tokens=384,          # slightly conservative for CPU Spaces
+            temperature=0.7,
+            top_p=0.9,
+            stop=["<|eot_id|>", "<|end_of_text|>"],
+            echo=False,
+        )
+
+        raw_output = output["choices"][0]["text"].strip()
+    except Exception as e:
+        # Fallback: show error message in the UI instead of crashing the Space
+        err_msg = f"❌ Error during generation: {e}"
+        return err_msg, err_msg
+
     # Parse into cards
     cards = parse_cards(raw_output)
-    
+
     if not cards:
-        # If parsing failed, show raw output
-        return f"Generated content:\n\n{raw_output}", raw_output
-    
+        # If parsing failed, show raw output as plain text
+        return f"Generated content (couldn't parse into cards):\n\n{raw_output}", raw_output
+
     # Format cards as HTML
     html_cards = ""
     for i, card in enumerate(cards, 1):
@@ -136,16 +145,13 @@ Generate {num_cards} question-answer pairs covering important concepts about thi
             </div>
         </div>
         """
-    
+
+    # First output: pretty HTML cards, second: raw model text
     return html_cards, raw_output
 
 
 # Build Gradio UI
-with gr.Blocks(
-    title="📚 Study Card Generator",
-    theme=gr.themes.Soft(primary_hue="purple"),
-    css=".gradio-container {max-width: 900px !important}"
-) as demo:
+with gr.Blocks() as demo:
     
     gr.Markdown(
         """
@@ -202,14 +208,72 @@ with gr.Blocks(
     # Examples
     gr.Examples(
         examples=[
-            ["Machine Learning basics", "", 3, "Beginner"],
-            ["The French Revolution", "", 4, "Intermediate"],
-            ["Quantum Computing", "", 3, "Advanced"],
-            ["", "Mitochondria are membrane-bound organelles found in the cytoplasm of eukaryotic cells. They are often referred to as the powerhouses of the cell because they generate most of the cell's supply of ATP, which is used as a source of chemical energy.", 3, "Intermediate"],
+            [
+                "Machine Learning basics",
+                "Machine learning allows computers to learn patterns from data without being explicitly programmed. It includes supervised learning, unsupervised learning, and reinforcement learning.",
+                3,
+                "Beginner"
+            ],
+            [
+                "Photosynthesis process",
+                "Photosynthesis is the process by which plants convert sunlight, water, and carbon dioxide into glucose and oxygen using chlorophyll in their chloroplasts.",
+                4,
+                "Beginner"
+            ],
+            [
+                "Causes of the French Revolution",
+                "The French Revolution was driven by economic hardship, social inequality under the Estates system, Enlightenment ideas challenging monarchy, and high taxation after costly wars.",
+                4,
+                "Intermediate"
+            ],
+            [
+                "Python loops overview",
+                "Python supports `for` loops for iterating over collections and `while` loops for repeating actions based on conditions. Loops allow automation and reduce repeated code.",
+                3,
+                "Beginner"
+            ],
+            [
+                "Backpropagation in neural networks",
+                "Backpropagation is a training algorithm that computes gradients by propagating errors backward through a neural network, enabling weight updates via gradient descent to reduce loss.",
+                4,
+                "Advanced"
+            ],
+            [
+                "Introduction to Quantum Computing",
+                "Quantum computers use qubits that can exist in superposition, enabling parallel computation. They exploit quantum phenomena like entanglement to solve certain problems faster than classical computers.",
+                3,
+                "Advanced"
+            ],
+            [
+                "Cell energy production (Mitochondria)",
+                "Mitochondria generate ATP through cellular respiration, including glycolysis, the citric acid cycle, and oxidative phosphorylation.",
+                3,
+                "Intermediate"
+            ],
+            [
+                "Function of the heart in the circulatory system",
+                "The heart pumps oxygenated blood to tissues and returns deoxygenated blood to the lungs for gas exchange, maintaining circulation and organ function.",
+                3,
+                "Beginner"
+            ],
+            [
+                "Impact of the Treaty of Versailles",
+                "The Treaty of Versailles imposed harsh reparations on Germany after WWI, contributing to economic crisis, resentment, and the rise of extremist political movements.",
+                3,
+                "Intermediate"
+            ],
+            [
+                "TCP reliability mechanisms",
+                "TCP ensures reliable communication using acknowledgement packets, retransmissions, sequence numbers, and congestion control algorithms like slow start.",
+                4,
+                "Advanced"
+            ],
         ],
         inputs=[topic_input, source_text, num_cards, difficulty],
         label="Try these examples:"
     )
+
+
     
     # Event handler
     generate_btn.click(
